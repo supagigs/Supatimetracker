@@ -1105,7 +1105,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: false,
+      devTools: true,
       backgroundThrottling: false,
       zoomFactor: 1.0,         // <--- ADD THIS: Forces 100% zoom regardless of user screen scaling
       visualZoomLevelLimits: [1, 1] // <--- ADD THIS: Prevents manual zooming
@@ -3905,23 +3905,30 @@ async function getScreenshotInterval(userEmail, sessionId) {
       Number.isFinite(perEmployeeSeconds) && perEmployeeSeconds > 0
         ? perEmployeeSeconds
         : DEFAULT_INTERVAL_SECONDS;
+    
+    // --- NEW RESILIENT CHECK ---
+    let finalIntervalSeconds = intervalSeconds;    
 
-    if (intervalSeconds === DEFAULT_INTERVAL_SECONDS) {
+     if (finalIntervalSeconds > 0 && finalIntervalSeconds < 30) {
+      logWarn('ScreenshotInterval', `Minute based interval detected (${finalIntervalSeconds}). Converting to seconds.`);
+      finalIntervalSeconds = finalIntervalSeconds * 60;
+      
+    }
+    if (finalIntervalSeconds === DEFAULT_INTERVAL_SECONDS) {
       logWarn('ScreenshotInterval', `No interval found for ${normalizedFreelancer} in map, using default ${DEFAULT_INTERVAL_SECONDS} seconds`);
     }
 
-    if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+    if (!Number.isFinite(finalIntervalSeconds) || finalIntervalSeconds <= 0) {
       logWarn(
         'ScreenshotInterval',
-        `Invalid interval value: ${intervalSeconds}, using default`,
+        `Invalid interval value: ${finalIntervalSeconds}, using default`,
       );
       return DEFAULT_INTERVAL_SECONDS * 1000;
     }
-
-    const intervalMs = intervalSeconds * 1000;
+    const intervalMs = finalIntervalSeconds * 1000;
     logInfo(
       'ScreenshotInterval',
-      `Using interval for client ${clientEmail}, employee ${normalizedFreelancer}: ${intervalSeconds} seconds (${intervalMs}ms)`,
+      `Using interval for client ${clientEmail}, employee ${normalizedFreelancer}: ${finalIntervalSeconds} seconds (${intervalMs}ms)`,
     );
     return intervalMs;
   } catch (e) {

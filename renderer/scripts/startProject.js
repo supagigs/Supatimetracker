@@ -1,4 +1,4 @@
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   const backBtn = document.getElementById('backBtn');
   const clockInBtn = document.getElementById('clockInBtn');
   const takeBreakBtn = document.getElementById('takeBreakBtn');
@@ -666,7 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Stop timer (Clock Out)
-  async function clockOut({ auto = false, reason = null, skipRedirect = false } = {}) {
+  async function clockOut({ auto = false, reason = null, skipRedirect = false, customEndTime = null } = {}) {
     if (clockOutInProgress) {
       console.warn('[TRACKER] clockOut ignored — already in progress');
       return;
@@ -689,7 +689,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const wasActive = isActive;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
-    const clockOutTime = new Date();
+    const clockOutTime = customEndTime ? new Date(customEndTime) : new Date();
     const finalStateAtClockOut = currentActivityState;
     const finalStateFrom = activityStateStartTime;
 
@@ -751,7 +751,8 @@ document.addEventListener('DOMContentLoaded', () => {
         finalActiveDuration,
         finalIdleTime,
         breakCount,
-        reason
+        reason,
+        customEndTime
       );
       if (finalStateAtClockOut && finalStateFrom) {
         await insertActivityLogSegment(finalStateAtClockOut, finalStateFrom, clockOutTime);
@@ -849,7 +850,8 @@ document.addEventListener('DOMContentLoaded', () => {
     activeDuration,
     idleDuration = 0,
     breakCountVal = 0,
-    clockOutReason = null
+    clockOutReason = null,
+    customEndTime = null
   ) {
     const email = StorageService.getItem('userEmail');
     const today = new Date().toISOString().split('T')[0];
@@ -893,7 +895,12 @@ document.addEventListener('DOMContentLoaded', () => {
               activeRow.activity_type = 'Execution';
             }
 
-            const serverNow = await window.frappe.getFrappeServerTime();
+            let serverNow = await window.frappe.getFrappeServerTime();
+            if (customEndTime) {
+              const d = new Date(customEndTime);
+              const pad = (n) => String(n).padStart(2, '0');
+              serverNow = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+            }
 
             activeRow.to_time = serverNow;
 
@@ -938,7 +945,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const updateData = {
-          end_time: new Date().toISOString(),
+          end_time: customEndTime || new Date().toISOString(),
           break_duration: breakDuration,
           active_duration: activeDuration,
           idle_duration: idleDuration,
@@ -1370,7 +1377,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (lockSuspendClockOutTriggered || !sessionStartTime || !isActive) return;
       if (sessionStartTime instanceof Date && !Number.isNaN(sessionStartTime.getTime()) && sessionStartTime.getTime() >= ts) return;
 
-
       lockSuspendClockOutTriggered = true;
       //console.log('[PowerEvents] Renderer startProject: clocking out on visibility/focus after recent system resume');
       clockOut({ auto: true, reason: 'resume_after_suspend' }).catch((err) => {
@@ -1503,9 +1509,55 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  if (isRecoveryMode && isActive && sessionStartTime) {
-    //console.log('[Recovery] Saving session that was not closed (app was force-closed or killed)...');
-    clockOut({ auto: true, reason: 'recovered_after_force_close' })
+    if (isRecoveryMode && isActive && sessionStartTime) {
+    let crashTimeStr = null;
+    
+    // First Attempt: Calculate from LocalStorage
+    try {
+      const storedStart = StorageService.getItem('sessionStartTime');
+      const storedActive = parseInt(StorageService.getItem('activeDuration') || '0', 10);
+      const storedBreak = parseInt(StorageService.getItem('breakDuration') || '0', 10);
+      const storedIdle = parseInt(StorageService.getItem('totalIdleTime') || '0', 10);
+
+      if (storedStart) {
+        const startTime = new Date(storedStart);
+        const totalSeconds = storedActive + storedBreak + storedIdle;
+        const crashTime = new Date(startTime.getTime() + (totalSeconds * 1000));
+        crashTimeStr = crashTime.toISOString();
+        console.log(`[Recovery] Calculated crash time from LocalStorage: ${crashTimeStr} (start: ${storedStart}, active: ${storedActive}s, break: ${storedBreak}s, idle: ${storedIdle}s)`);
+      }
+    } catch (localErr) {
+      console.warn('[Recovery] Local crash time calculation failed:', localErr);
+    }
+
+    // Second Attempt: Query Supabase if LocalStorage calculation failed
+    if (!crashTimeStr) {
+      try {
+        const supabaseSessionId = StorageService.getItem('supabaseSessionId') || StorageService.getItem('currentSessionId');
+        if (supabaseSessionId && window.supabase) {
+          const { data: sessionData, error } = await window.supabase
+            .from('time_sessions')
+            .select('start_time, total_duration')
+            .eq('id', parseInt(supabaseSessionId, 10))
+            .single();
+            
+          if (!error && sessionData && sessionData.start_time) {
+            const startTime = new Date(sessionData.start_time);
+            const totalSeconds = sessionData.total_duration || 0;
+            const crashTime = new Date(startTime.getTime() + (totalSeconds * 1000));
+            crashTimeStr = crashTime.toISOString();
+            console.log(`[Recovery] Calculated crash time from Supabase fallback: ${crashTimeStr} (start: ${sessionData.start_time}, duration: ${totalSeconds}s)`);
+          } else if (error) {
+            console.error('[Recovery] Supabase fallback query error:', error);
+          }
+        }
+      } catch (err) {
+        console.error('[Recovery] Supabase fallback query exception:', err);
+      }
+    }
+
+    // Clock out with calculated crash time and reason set to 'termination'
+    clockOut({ auto: true, reason: 'recovered_after_force_close', customEndTime: crashTimeStr })
       .then(() => { window.location.href = 'projects.html'; })
       .catch((err) => {
         console.error('[Recovery] Clock-out failed:', err);
