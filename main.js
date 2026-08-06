@@ -992,7 +992,7 @@ let timeTrackingState = {
   pausedAt: null,
   totalActiveMs: 0,
 };
-const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
+const STORAGE_BUCKET = process.env.SUPABASE_SCREENSHOT_BUCKET || 'screenshots';
 
 // Track pending uploads that can be cancelled
 const pendingScreenshots = new Map();
